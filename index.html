@@ -352,8 +352,9 @@
         </div>
     </div>
     <script>
-        const API_URL = "https://script.google.com/macros/s/AKfycbydv1zdD6uQk3X21KmU5cw9hSOKyVfrhusXQeOg6-IUlbkIdu7PjrqNUOpmA0ctC6PX/exec";
+        const API_URL = "https://script.google.com/macros/s/AKfycbxLETI1CPluE7iR21yvRmPP_-JJFdGrE5Rhhd5L8wWsQGN30Q9jTO758lSyDjBEIwSV/exec";
         let appData = {};
+        let cachedImages = { logo: null, founder: null }; // stored as base64 strings
         // Create floating particles
         (function() {
             const colors = ['#ff0080','#7928ca','#00d2ff','#00ff88','#fbbf24'];
@@ -382,27 +383,72 @@
                 throw e;
             }
         }
+        const CACHE_KEY = 'goats_appdata';
+        const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
+        function saveCache(data) {
+            try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+            } catch(e) {} // ignore if storage full
+        }
+        function loadCache() {
+            try {
+                const raw = localStorage.getItem(CACHE_KEY);
+                if (!raw) return null;
+                const { ts, data } = JSON.parse(raw);
+                if (Date.now() - ts > CACHE_TTL) return null; // expired
+                return data;
+            } catch(e) { return null; }
+        }
         async function init() {
             document.getElementById('retry-btn').style.display = 'none';
-            document.getElementById('sp-status').innerText = 'Loading your data...';
+            document.getElementById('sp-status').innerHTML = 'Loading...';
             try {
                 const urlName = new URLSearchParams(window.location.search).get('name');
-                appData = await call({action:"getInitialData"});
-                document.getElementById('sp-logo').src = appData.logo;
-                document.getElementById('h-logo').src  = appData.logo;
-                // Use base64 for poster images (html2canvas can't load external URLs)
-                document.getElementById('p-logo').src  = appData.logoB64 || appData.logo;
-                document.getElementById('p-founder').src = appData.founderB64 || appData.founder;
-                const ds = document.getElementById('sel-dept');
-                ds.innerHTML = '<option disabled selected>Select Your Department</option>';
-                (appData.depts || []).forEach(d => ds.add(new Option(d,d)));
+                // ── Try cache first (saves 1 API call for returning students) ──
+                const cached = loadCache();
+                if (cached) {
+                    appData = cached;
+                    document.getElementById('sp-status').innerHTML =
+                        'Welcome back! ⚡<br><span style="font-size:8px;opacity:0.4;">Data from cache · refreshes every 24h</span>';
+                    applyAppData();
+                    const saved = urlName || localStorage.getItem('goats_s');
+                    if (saved) await fetchStats(saved);
+                    else show('login');
+                    // Refresh cache in background (non-blocking)
+                    refreshCacheInBackground();
+                    return;
+                }
+                // ── Fresh fetch ──
+                document.getElementById('sp-status').innerHTML = 'Connecting to G.O.A.T.S...';
+                appData = await call({action: "getInitialData"});
+                if (!appData || !appData.logo) throw new Error("No data from server.");
+                saveCache(appData);
+                applyAppData();
                 const saved = urlName || localStorage.getItem('goats_s');
-                if(saved) await fetchStats(saved);
+                if (saved) await fetchStats(saved);
                 else show('login');
             } catch(e) {
-                document.getElementById('sp-status').innerText = 'Connection failed. Check internet.';
+                document.getElementById('sp-status').innerHTML =
+                    'Connection Failed<br><span style="color:#ff4757; font-size:9px;">' + e.message.toUpperCase() + '</span>';
                 document.getElementById('retry-btn').style.display = 'block';
             }
+        }
+        function applyAppData() {
+            cachedImages.logo    = appData.logoB64 || appData.logo;
+            cachedImages.founder = appData.founderB64 || appData.founder;
+            document.getElementById('sp-logo').src  = appData.logo;
+            document.getElementById('h-logo').src   = appData.logo;
+            document.getElementById('p-logo').src   = cachedImages.logo;
+            document.getElementById('p-founder').src = cachedImages.founder;
+            const ds = document.getElementById('sel-dept');
+            ds.innerHTML = '<option disabled selected>Select Your Department</option>';
+            (appData.depts || []).forEach(d => ds.add(new Option(d, d)));
+        }
+        async function refreshCacheInBackground() {
+            try {
+                const fresh = await call({action: "getInitialData"});
+                if (fresh && fresh.logo) saveCache(fresh);
+            } catch(e) { /* silently fail */ }
         }
         function show(v) {
             document.getElementById('view-login').style.display = v==='login' ? 'block' : 'none';
@@ -500,15 +546,14 @@
         }
         function savePoster() {
             const btn = event.target;
-            btn.innerText = 'Saving...';
-            btn.disabled = true;
-            // Read current student data from DOM
-            const name    = document.getElementById('p-name').innerText;
-            const pts     = document.getElementById('p-total').innerText;
-            const house   = document.getElementById('c-house').innerText;
-            const dept    = document.getElementById('p-dept').innerText.replace('📚 ','');
-            const logoSrc = document.getElementById('p-logo').src;
-            const foundSrc= document.getElementById('p-founder').src;
+            btn.innerText = 'Saving...'; btn.disabled = true;
+            // Read student data from DOM
+            const name  = document.getElementById('p-name').innerText;
+            const pts   = document.getElementById('p-total').innerText;
+            const house = document.getElementById('c-house').innerText;
+            // Use cached base64 images (avoids all CORS issues)
+            const logoSrc  = cachedImages.logo;
+            const foundSrc = cachedImages.founder;
             const W = 800, H = 500;
             const canvas = document.createElement('canvas');
             canvas.width = W; canvas.height = H;
@@ -531,45 +576,47 @@
             ctx.lineWidth = 4;
             ctx.roundRect(2, 2, W-4, H-4, 28);
             ctx.stroke();
-            // Helper to load an image
-            const loadImg = (src) => new Promise((res, rej) => {
-                if (!src) return res(null);
+            // Helper to load an image — do NOT set crossOrigin for base64 data URLs
+            const loadImg = (src) => new Promise((res) => {
+                if (!src || src.length < 5) return res(null);
                 const img = new Image();
-                img.crossOrigin = 'anonymous';
+                // crossOrigin only for external http URLs (not data: URLs)
+                if (src.startsWith('http')) img.crossOrigin = 'anonymous';
                 img.onload  = () => res(img);
-                img.onerror = () => res(null);
+                img.onerror = () => {
+                    console.warn('Image load failed:', src.substring(0, 60));
+                    res(null);
+                };
                 img.src = src;
             });
+            // Helper: draw a circular image or a placeholder ring
+            const drawCircleImg = (img, cx, cy, r, borderColor) => {
+                if (img) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, 0, Math.PI*2);
+                    ctx.clip();
+                    ctx.drawImage(img, cx-r, cy-r, r*2, r*2);
+                    ctx.restore();
+                } else {
+                    // Draw placeholder circle
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, r, 0, Math.PI*2);
+                    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+                    ctx.fill();
+                }
+                // Border ring
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI*2);
+                ctx.strokeStyle = borderColor;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            };
             Promise.all([loadImg(logoSrc), loadImg(foundSrc)]).then(([logo, founder]) => {
                 // Draw logo (circle, top-left)
-                if (logo) {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.arc(70, 70, 45, 0, Math.PI*2);
-                    ctx.clip();
-                    ctx.drawImage(logo, 25, 25, 90, 90);
-                    ctx.restore();
-                    // circle border
-                    ctx.beginPath();
-                    ctx.arc(70, 70, 45, 0, Math.PI*2);
-                    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
+                drawCircleImg(logo, 70, 70, 48, 'rgba(255,255,255,0.5)');
                 // Draw founder (circle, top-right)
-                if (founder) {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.arc(W-70, 70, 45, 0, Math.PI*2);
-                    ctx.clip();
-                    ctx.drawImage(founder, W-115, 25, 90, 90);
-                    ctx.restore();
-                    ctx.beginPath();
-                    ctx.arc(W-70, 70, 45, 0, Math.PI*2);
-                    ctx.strokeStyle = '#fbbf24';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
+                drawCircleImg(founder, W-70, 70, 48, '#fbbf24');
                 // College name
                 ctx.fillStyle = 'rgba(255,255,255,0.7)';
                 ctx.font = 'bold 22px Arial';
