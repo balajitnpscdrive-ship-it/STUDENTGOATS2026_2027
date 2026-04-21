@@ -501,20 +501,132 @@
         function savePoster() {
             const btn = event.target;
             btn.innerText = 'Saving...';
-            // allowTaint + useCORS ensures images already embedded as base64 are captured
-            html2canvas(document.querySelector('#cap-zone'), {
-                scale: 2,
-                backgroundColor: '#0f0c29',
-                allowTaint: true,
-                useCORS: false,
-                logging: false
-            }).then(canvas => {
-                const a = document.createElement('a');
-                a.download = 'MyGoatsCard.png';
-                a.href = canvas.toDataURL();
-                a.click();
-                btn.innerText = '📥 Save My Card';
-                confetti({particleCount:60, spread:50, origin:{y:0.8}});
+            btn.disabled = true;
+            // Read current student data from DOM
+            const name    = document.getElementById('p-name').innerText;
+            const pts     = document.getElementById('p-total').innerText;
+            const house   = document.getElementById('c-house').innerText;
+            const dept    = document.getElementById('p-dept').innerText.replace('📚 ','');
+            const logoSrc = document.getElementById('p-logo').src;
+            const foundSrc= document.getElementById('p-founder').src;
+            const W = 800, H = 500;
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const ctx = canvas.getContext('2d');
+            // Background gradient
+            const bg = ctx.createLinearGradient(0, 0, W, H);
+            bg.addColorStop(0, '#0f0c29');
+            bg.addColorStop(0.5, '#302b63');
+            bg.addColorStop(1, '#24243e');
+            ctx.fillStyle = bg;
+            ctx.roundRect(0, 0, W, H, 30);
+            ctx.fill();
+            // Rainbow border
+            const brd = ctx.createLinearGradient(0, 0, W, H);
+            brd.addColorStop(0,   '#ff0080');
+            brd.addColorStop(0.33,'#7928ca');
+            brd.addColorStop(0.66,'#00d2ff');
+            brd.addColorStop(1,   '#00ff88');
+            ctx.strokeStyle = brd;
+            ctx.lineWidth = 4;
+            ctx.roundRect(2, 2, W-4, H-4, 28);
+            ctx.stroke();
+            // Helper to load an image
+            const loadImg = (src) => new Promise((res, rej) => {
+                if (!src) return res(null);
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload  = () => res(img);
+                img.onerror = () => res(null);
+                img.src = src;
+            });
+            Promise.all([loadImg(logoSrc), loadImg(foundSrc)]).then(([logo, founder]) => {
+                // Draw logo (circle, top-left)
+                if (logo) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(70, 70, 45, 0, Math.PI*2);
+                    ctx.clip();
+                    ctx.drawImage(logo, 25, 25, 90, 90);
+                    ctx.restore();
+                    // circle border
+                    ctx.beginPath();
+                    ctx.arc(70, 70, 45, 0, Math.PI*2);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                // Draw founder (circle, top-right)
+                if (founder) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(W-70, 70, 45, 0, Math.PI*2);
+                    ctx.clip();
+                    ctx.drawImage(founder, W-115, 25, 90, 90);
+                    ctx.restore();
+                    ctx.beginPath();
+                    ctx.arc(W-70, 70, 45, 0, Math.PI*2);
+                    ctx.strokeStyle = '#fbbf24';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+                // College name
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.font = 'bold 22px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('DON BOSCO POLYTECHNIC COLLEGE', W/2, 150);
+                // Title
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 52px Arial';
+                ctx.fillText('MY POINT CARD', W/2, 215);
+                // G.O.A.T.S label
+                ctx.fillStyle = '#fbbf24';
+                ctx.font = 'bold 16px Arial';
+                ctx.letterSpacing = '4px';
+                ctx.fillText('G.O.A.T.S CHAMPIONSHIP', W/2, 255);
+                // Divider
+                ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+                ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(60, 275); ctx.lineTo(W-60, 275); ctx.stroke();
+                // Certificate text
+                ctx.font = '20px Arial';
+                ctx.textAlign = 'center';
+                // Line 1
+                ctx.fillStyle = 'rgba(255,255,255,0.85)';
+                ctx.fillText('This is to certify that', W/2, 320);
+                // Student name (highlighted)
+                ctx.fillStyle = '#fbbf24';
+                ctx.font = 'bold 26px Arial';
+                ctx.fillText(name, W/2, 355);
+                // Line 2
+                ctx.fillStyle = 'rgba(255,255,255,0.85)';
+                ctx.font = '20px Arial';
+                ctx.fillText('has earned', W/2, 390);
+                // Points (big green)
+                ctx.fillStyle = '#00ff88';
+                ctx.font = 'bold 36px Arial';
+                ctx.fillText(pts + ' points', W/2, 130 + 300);
+                // House
+                ctx.fillStyle = 'rgba(255,255,255,0.85)';
+                ctx.font = '20px Arial';
+                ctx.fillText('for the', W/2, 465);
+                ctx.fillStyle = '#a855f7';
+                ctx.font = 'bold 22px Arial';
+                ctx.fillText(house + ' HOUSE', W/2, 492);
+                // Footer
+                ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                ctx.font = '13px Arial';
+                ctx.fillText('G.O.A.T.S OFFICIAL RECORD', W/2, H - 18);
+                // Download
+                canvas.toBlob(blob => {
+                    const a = document.createElement('a');
+                    a.download = 'GOATS_' + name.replace(/ /g,'_') + '.png';
+                    a.href = URL.createObjectURL(blob);
+                    a.click();
+                    btn.innerText = '📥 Save My Card';
+                    btn.disabled = false;
+                    confetti({particleCount:80, spread:60, origin:{y:0.8}});
+                }, 'image/png');
             });
         }
         function logout() {
